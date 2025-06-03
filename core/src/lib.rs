@@ -1,14 +1,6 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! # WireKey Core SDK
+//!
+//! This crate provides the core functionality for the WireKey E2E encryption SDK,
+//! implementing the Signal protocol for secure messaging.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+mod storage;
