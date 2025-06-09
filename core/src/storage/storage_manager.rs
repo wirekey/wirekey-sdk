@@ -1,11 +1,9 @@
 use std::fmt::Debug;
 use std::sync::Arc;
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::{Aead}};
-use argon2::{Argon2, password_hash::SaltString};
-use rand::{rngs::OsRng, Rng};
-use sha2::{Sha256, Digest};
 
-use crate::storage::{LocalStorage, StorageResult, StorageError};
+use anyhow::anyhow;
+use crate::crypto::{ArgonCipher};
+use crate::storage::{KeyValueStorage};
 
 /// A wrapper around a `LocalStorage` implementation that encrypts/decrypts data
 /// as it is written to/read from the storage.
@@ -16,103 +14,64 @@ use crate::storage::{LocalStorage, StorageResult, StorageError};
 /// Each value is stored with a random nonce prepended to it, which is used for decryption.
 #[derive(Debug)]
 pub struct StorageManager {
-    storage: Arc<dyn LocalStorage>,
-    encryption_key: [u8; 32],
+    storage: Arc<dyn KeyValueStorage>,
+    cipher: ArgonCipher,
     bucket: String,
 }
 
 impl StorageManager {
-    pub fn new(storage: Arc<dyn LocalStorage>, secret: &str, bucket: &str) -> StorageResult<Self> {
-        let encryption_key = Self::derive_key(secret)?;
+    pub fn new(bucket: &str, secret: &str, storage: Arc<dyn KeyValueStorage>) -> Result<Self, anyhow::Error> {
+        let cipher = ArgonCipher::new(secret)?;
         Ok(Self {
             storage,
-            encryption_key,
+            cipher,
             bucket: bucket.to_string(),
         })
     }
-
-    fn derive_key(secret: &str) -> StorageResult<[u8; 32]> {
-        // Generate a salt from the secret
-        let mut hasher = Sha256::new();
-        hasher.update(secret.as_bytes());
-        let salt_bytes = hasher.finalize();
-
-        // Convert to SaltString format
-        let salt = SaltString::encode_b64(&salt_bytes[..16])
-            .expect("Failed to encode salt");
-
-        // Derive the encryption key using Argon2
-        let mut output_key = [0u8; 32];
-        Argon2::default().hash_password_into(
-            secret.as_bytes(),
-            salt.as_str().as_bytes(),
-            &mut output_key,
-        ).map_err(|e| StorageError::OperationFailed(format!("Failed to derive encryption key: {}", e)))?;
-
-        Ok(output_key)
-    }
-
-    fn encrypt(&self, data: &[u8]) -> StorageResult<Vec<u8>> {
-        // Generate a random 12-byte nonce
-        let mut nonce_bytes = [0u8; 12];
-        OsRng.fill(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        // Encrypt the data using AES-GCM.
-        let cipher = Aes256Gcm::new_from_slice(&self.encryption_key)
-            .map_err(|e| StorageError::OperationFailed(format!("Failed to create cipher: {}", e)))?;        
-        let encrypted = cipher.encrypt(nonce, data)
-            .map_err(|e| StorageError::OperationFailed(format!("Encryption failed: {}", e)))?;
-
-        // Prepend the nonce to the encrypted data
-        let mut result = Vec::with_capacity(nonce_bytes.len() + encrypted.len());
-        result.extend_from_slice(&nonce_bytes);
-        result.extend_from_slice(&encrypted);
-
-        Ok(result)
-    }
-
-    fn decrypt(&self, encrypted_data: &[u8]) -> StorageResult<Vec<u8>> {
-        // Ensure the data is at least as long as the nonce
-        if encrypted_data.len() < 12 {
-            return Err(StorageError::OperationFailed("Encrypted data too short".to_string()));
-        }
-
-        // Extract the nonce and ciphertext
-        let nonce = Nonce::from_slice(&encrypted_data[..12]);
-        let ciphertext = &encrypted_data[12..];
-
-        // Decrypt the data using AES-GCM
-        let cipher = Aes256Gcm::new_from_slice(&self.encryption_key)
-            .map_err(|e| StorageError::OperationFailed(format!("Failed to create cipher: {}", e)))?;        
-        let decrypted = cipher.decrypt(nonce, ciphertext)
-            .map_err(|e| StorageError::OperationFailed(format!("Decryption failed: {}", e)))?;
-
-        Ok(decrypted)
-    }
 }
 
-impl LocalStorage for StorageManager {
-    fn get(&self, key: &str) -> StorageResult<Vec<u8>> {
+impl KeyValueStorage for StorageManager {
+    fn get(&self, key: &str) -> Result<Vec<u8>, anyhow::Error> {
         let prefixed_key = format!("{}{}", self.bucket, key);
         let encrypted = self.storage.get(&prefixed_key)?;
-        self.decrypt(&encrypted)
+        self.cipher.decrypt(&encrypted)
     }
 
-    fn put(&self, key: &str, value: &[u8]) -> StorageResult<()> {
+    fn put(&self, key: &str, value: &[u8]) -> Result<(), anyhow::Error> {
         let prefixed_key = format!("{}{}", self.bucket, key);
-        let encrypted = self.encrypt(value)?;        
+        let encrypted = self.cipher.encrypt(value)?;
         self.storage.put(&prefixed_key, &encrypted)
     }
 
-    fn delete(&self, key: &str) -> StorageResult<()> {
+    fn delete(&self, key: &str) -> Result<(), anyhow::Error> {
         let prefixed_key = format!("{}{}", self.bucket, key);
         self.storage.delete(&prefixed_key)
     }
 
-    fn exists(&self, key: &str) -> StorageResult<bool> {
+    fn exists(&self, key: &str) -> Result<bool, anyhow::Error> {
         let prefixed_key = format!("{}{}", self.bucket, key);
         self.storage.exists(&prefixed_key)
+    }
+
+    fn scan_prefix(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, anyhow::Error> {
+        let prefixed_prefix = format!("{}{}", self.bucket, prefix);
+        let encrypted_items = self.storage.scan_prefix(&prefixed_prefix)?;
+
+        // Process each item: remove bucket prefix from key and decrypt value
+        let mut result = Vec::with_capacity(encrypted_items.len());
+        for (key, encrypted_value) in encrypted_items {
+            // Remove bucket prefix from key
+            let original_key = key.strip_prefix(&self.bucket)
+                .ok_or_else(|| anyhow!("Key does not have expected bucket prefix: {}", key))?
+                .to_string();
+
+            // Decrypt the value
+            let decrypted_value = self.cipher.decrypt(&encrypted_value)?;
+
+            result.push((original_key, decrypted_value));
+        }
+
+        Ok(result)
     }
 }
 
@@ -130,7 +89,7 @@ mod tests {
         let bucket = "test_bucket_";
 
         // Act
-        let result = StorageManager::new(memory_storage, secret, bucket);
+        let result = StorageManager::new(bucket, secret, memory_storage);
 
         // Assert
         assert!(result.is_ok());
@@ -142,8 +101,8 @@ mod tests {
         let secret = "test_secret";
 
         // Act
-        let key1 = StorageManager::derive_key(secret).unwrap();
-        let key2 = StorageManager::derive_key(secret).unwrap();
+        let key1 = ArgonCipher::derive_key(secret).unwrap();
+        let key2 = ArgonCipher::derive_key(secret).unwrap();
 
         // Assert
         assert_eq!(key1, key2, "Keys derived from the same secret should be identical");
@@ -156,8 +115,8 @@ mod tests {
         let secret2 = "test_secret_2";
 
         // Act
-        let key1 = StorageManager::derive_key(secret1).unwrap();
-        let key2 = StorageManager::derive_key(secret2).unwrap();
+        let key1 = ArgonCipher::derive_key(secret1).unwrap();
+        let key2 = ArgonCipher::derive_key(secret2).unwrap();
 
         // Assert
         assert_ne!(key1, key2, "Keys derived from different secrets should be different");
@@ -169,12 +128,12 @@ mod tests {
         let memory_storage = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager = StorageManager::new(memory_storage, secret, bucket).unwrap();
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage).unwrap();
         let original_data = b"This is a test message";
 
         // Act
-        let encrypted = storage_manager.encrypt(original_data).unwrap();
-        let decrypted = storage_manager.decrypt(&encrypted).unwrap();
+        let encrypted = storage_manager.cipher.encrypt(original_data).unwrap();
+        let decrypted = storage_manager.cipher.decrypt(&encrypted).unwrap();
 
         // Assert
         assert_ne!(encrypted, original_data, "Encrypted data should be different from original");
@@ -188,20 +147,17 @@ mod tests {
         let memory_storage = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager = StorageManager::new(memory_storage, secret, bucket).unwrap();
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage).unwrap();
         let invalid_data = vec![1, 2, 3]; // Too short to contain a nonce
 
         // Act
-        let result = storage_manager.decrypt(&invalid_data);
+        let result = storage_manager.cipher.decrypt(&invalid_data);
 
         // Assert
         assert!(result.is_err());
-        match result {
-            Err(StorageError::OperationFailed(msg)) => {
-                assert!(msg.contains("too short"), "Error should mention data being too short");
-            }
-            _ => panic!("Expected OperationFailed error"),
-        }
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("too short"), "Error should mention data being too short");
     }
 
     #[test]
@@ -210,9 +166,9 @@ mod tests {
         let memory_storage = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager = StorageManager::new(memory_storage, secret, bucket).unwrap();
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage).unwrap();
         let original_data = b"This is a test message";
-        let mut encrypted = storage_manager.encrypt(original_data).unwrap();
+        let mut encrypted = storage_manager.cipher.encrypt(original_data).unwrap();
 
         // Tamper with the encrypted data (not the nonce)
         if encrypted.len() > 15 {
@@ -220,16 +176,13 @@ mod tests {
         }
 
         // Act
-        let result = storage_manager.decrypt(&encrypted);
+        let result = storage_manager.cipher.decrypt(&encrypted);
 
         // Assert
         assert!(result.is_err());
-        match result {
-            Err(StorageError::OperationFailed(msg)) => {
-                assert!(msg.contains("Decryption failed"), "Error should mention decryption failure");
-            }
-            _ => panic!("Expected OperationFailed error"),
-        }
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("Decryption failed"), "Error should mention decryption failure");
     }
 
     #[test]
@@ -238,7 +191,7 @@ mod tests {
         let memory_storage = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager = StorageManager::new(memory_storage.clone(), secret, bucket).unwrap();
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage.clone()).unwrap();
         let key = "test_key";
         let value = b"test_value";
 
@@ -261,7 +214,7 @@ mod tests {
         let memory_storage = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager = StorageManager::new(memory_storage.clone(), secret, bucket).unwrap();
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage.clone()).unwrap();
         let key = "test_key";
         let value = b"test_value";
         storage_manager.put(key, value).unwrap();
@@ -278,7 +231,7 @@ mod tests {
         let memory_storage = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager = StorageManager::new(memory_storage.clone(), secret, bucket).unwrap();
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage.clone()).unwrap();
         let key = "test_key";
         let value = b"test_value";
         storage_manager.put(key, value).unwrap();
@@ -297,7 +250,7 @@ mod tests {
         let memory_storage = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager = StorageManager::new(memory_storage.clone(), secret, bucket).unwrap();
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage.clone()).unwrap();
         let key = "test_key";
         let value = b"test_value";
         storage_manager.put(key, value).unwrap();
@@ -306,10 +259,10 @@ mod tests {
         // Act & Assert - Get after delete
         let retrieved_after_delete = storage_manager.get(key);
         assert!(retrieved_after_delete.is_err());
-        match retrieved_after_delete {
-            Err(StorageError::KeyNotFound(_)) => (),
-            _ => panic!("Expected KeyNotFound error"),
-        }
+        let err = retrieved_after_delete.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("not found") || err_msg.contains("Key not found"), 
+                "Error should indicate key not found");
     }
 
     #[test]
@@ -319,8 +272,8 @@ mod tests {
         let memory_storage2 = Arc::new(MemoryStorage::new());
         let secret = "test_secret";
         let bucket = "test_bucket_";
-        let storage_manager1 = StorageManager::new(memory_storage1, secret, bucket).unwrap();
-        let _storage_manager2 = StorageManager::new(memory_storage2.clone(), secret, bucket).unwrap();
+        let storage_manager1 = StorageManager::new(bucket, secret, memory_storage1).unwrap();
+        let _storage_manager2 = StorageManager::new(bucket, secret, memory_storage2.clone()).unwrap();
         let key = "test_key";
         let value = b"test_value";
 
@@ -342,8 +295,8 @@ mod tests {
         let secret = "test_secret";
         let bucket1 = "bucket1_";
         let bucket2 = "bucket2_";
-        let storage_manager1 = StorageManager::new(memory_storage.clone(), secret, bucket1).unwrap();
-        let storage_manager2 = StorageManager::new(memory_storage.clone(), secret, bucket2).unwrap();
+        let storage_manager1 = StorageManager::new(bucket1, secret, memory_storage.clone()).unwrap();
+        let storage_manager2 = StorageManager::new(bucket2, secret, memory_storage.clone()).unwrap();
         let key = "test_key";
         let value1 = b"test_value_1";
         let value2 = b"test_value_2";
@@ -376,8 +329,8 @@ mod tests {
         let secret1 = "test_secret_1";
         let secret2 = "test_secret_2";
         let bucket = "test_bucket_";
-        let storage_manager1 = StorageManager::new(memory_storage1.clone(), secret1, bucket).unwrap();
-        let storage_manager2 = StorageManager::new(memory_storage2.clone(), secret2, bucket).unwrap();
+        let storage_manager1 = StorageManager::new(bucket, secret1, memory_storage1.clone()).unwrap();
+        let storage_manager2 = StorageManager::new(bucket, secret2, memory_storage2.clone()).unwrap();
         let key = "test_key";
         let value = b"test_value";
 
@@ -392,5 +345,81 @@ mod tests {
 
         // Assert
         assert_ne!(encrypted1, encrypted2, "Encryptions with different secrets should be different");
+    }
+
+    #[test]
+    fn scan_prefix_returns_matching_items() {
+        // Arrange
+        let memory_storage = Arc::new(MemoryStorage::new());
+        let secret = "test_secret";
+        let bucket = "test_bucket_";
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage).unwrap();
+
+        // Add some test data
+        storage_manager.put("prefix_key1", b"value1").unwrap();
+        storage_manager.put("prefix_key2", b"value2").unwrap();
+        storage_manager.put("other_key", b"value3").unwrap();
+
+        // Act
+        let result = storage_manager.scan_prefix("prefix_").unwrap();
+
+        // Assert
+        assert_eq!(result.len(), 2, "Should return 2 items with prefix 'prefix_'");
+
+        // Sort results for deterministic comparison
+        let mut sorted_result = result;
+        sorted_result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        assert_eq!(sorted_result[0].0, "prefix_key1");
+        assert_eq!(sorted_result[0].1, b"value1");
+        assert_eq!(sorted_result[1].0, "prefix_key2");
+        assert_eq!(sorted_result[1].1, b"value2");
+    }
+
+    #[test]
+    fn scan_prefix_with_no_matches_returns_empty_vector() {
+        // Arrange
+        let memory_storage = Arc::new(MemoryStorage::new());
+        let secret = "test_secret";
+        let bucket = "test_bucket_";
+        let storage_manager = StorageManager::new(bucket, secret, memory_storage).unwrap();
+
+        // Add some test data that doesn't match the prefix
+        storage_manager.put("key1", b"value1").unwrap();
+        storage_manager.put("key2", b"value2").unwrap();
+
+        // Act
+        let result = storage_manager.scan_prefix("nonexistent_").unwrap();
+
+        // Assert
+        assert_eq!(result.len(), 0, "Should return empty vector for non-matching prefix");
+    }
+
+    #[test]
+    fn scan_prefix_with_different_buckets_maintains_isolation() {
+        // Arrange
+        let memory_storage = Arc::new(MemoryStorage::new());
+        let secret = "test_secret";
+        let bucket1 = "bucket1_";
+        let bucket2 = "bucket2_";
+        let storage_manager1 = StorageManager::new(bucket1, secret, memory_storage.clone()).unwrap();
+        let storage_manager2 = StorageManager::new(bucket2, secret, memory_storage).unwrap();
+
+        // Add data to both storage managers with the same key prefix
+        storage_manager1.put("test_key", b"value1").unwrap();
+        storage_manager2.put("test_key", b"value2").unwrap();
+
+        // Act
+        let result1 = storage_manager1.scan_prefix("test_").unwrap();
+        let result2 = storage_manager2.scan_prefix("test_").unwrap();
+
+        // Assert
+        assert_eq!(result1.len(), 1, "Should return 1 item for bucket1");
+        assert_eq!(result2.len(), 1, "Should return 1 item for bucket2");
+
+        assert_eq!(result1[0].0, "test_key");
+        assert_eq!(result1[0].1, b"value1");
+        assert_eq!(result2[0].0, "test_key");
+        assert_eq!(result2[0].1, b"value2");
     }
 }

@@ -10,4 +10,5 @@ pub trait KeyManagementApi {
     async fn upload_one_time_prekeys(&self, prekeys: Vec<PublicOneTimePreKey>) -> Result<(), ApiError>;
     async fn get_prekey_count(&self) -> Result<u32, ApiError>;
     async fn get_private_keys(&self) -> Result<PrivateKeys, ApiError>;
+    async fn upload_private_keys(&self, private_keys: PrivateKeys) -> Result<(), ApiError>;
 }
