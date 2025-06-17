@@ -4,3 +4,7 @@
 //! implementing the Signal protocol for secure messaging.
 
 mod storage;
+mod crypto;
+mod api;
+
+pub use api::{ApiClient, KeyManagementApi, Error};
