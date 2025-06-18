@@ -2,10 +2,12 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::{Aead}};
 use argon2::{Argon2, password_hash::SaltString};
 use rand::{rngs::OsRng, Rng};
 use sha2::{Sha256, Digest};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Handles encryption and decryption of data using AES-GCM with an encryption key derived
 /// from a secret using deterministic Argon2
-#[derive(Debug)]
+#[derive(Debug, Zeroize)]
+#[zeroize(drop)]
 pub struct ArgonCipher {
     encryption_key: [u8; 32],
 }
