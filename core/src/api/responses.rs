@@ -1,11 +1,11 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub(super) struct PrekeyCountResponse {
     pub count: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub(super) struct LoginFinishResponse {
     pub session_token: String,
 }

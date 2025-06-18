@@ -1,7 +1,9 @@
 use crate::api::error::Error;
+use crate::api::http_send::HttpSend;
 use crate::api::prekey_bundle::{PreKeyBundle, PublicOneTimePreKey, PublicSignedPreKey};
 use crate::api::private_keys::PrivateKeys;
 use crate::api::responses::PrekeyCountResponse;
+use crate::api::rng_provider::RngProvider;
 use crate::ApiClient;
 
 /// API for managing encryption keys on the server
@@ -16,7 +18,7 @@ pub trait KeyManagementApi {
 }
 
 #[async_trait::async_trait]
-impl KeyManagementApi for ApiClient {
+impl<S: HttpSend, R: RngProvider>KeyManagementApi for ApiClient<S, R> {
     async fn get_prekey_bundle(&self, client_id: &str) -> Result<PreKeyBundle, Error> {
         let url = format!("{}/prekey-bundle/{}", self.server_url, client_id);
         let response = self.send_get(&url).await?;

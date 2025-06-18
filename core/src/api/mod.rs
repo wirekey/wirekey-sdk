@@ -13,6 +13,8 @@ mod http_send;
 mod rng_provider;
 #[cfg(test)]
 mod mock_rng_provider;
+#[cfg(test)]
+mod key_management_tests;
 
 pub use key_management::KeyManagementApi;
 pub use api_client::ApiClient;

@@ -1,11 +1,8 @@
 use std::sync::{Arc, Mutex};
-use aes_gcm::aead::rand_core::{CryptoRng, Error, RngCore};
 use async_trait::async_trait;
 use http::StatusCode;
-use rand::SeedableRng;
 use reqwest::{Request, RequestBuilder, Response};
 use crate::api::http_send::HttpSend;
-use crate::api::rng_provider::RngProvider;
 
 // Thread-safe mock that captures requests for inspection
 pub(super) struct MockSender {
@@ -40,10 +37,14 @@ impl HttpSend for MockSender {
 
 // Helper function to create a successful response
 pub(super) fn create_ok_response() -> Response {
+    create_ok_response_with_payload(Vec::new())
+}
+
+pub(super) fn create_ok_response_with_payload(payload: Vec<u8>) -> Response {
     Response::from(
         http::response::Builder::new()
             .status(StatusCode::OK)
-            .body(Vec::new())
+            .body(payload)
             .unwrap()
     )
 }
