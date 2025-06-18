@@ -15,6 +15,10 @@ mod rng_provider;
 mod mock_rng_provider;
 #[cfg(test)]
 mod key_management_tests;
+#[cfg(test)]
+mod api_client_tests;
+#[cfg(test)]
+mod auth_tests;
 
 pub use key_management::KeyManagementApi;
 pub use api_client::ApiClient;
