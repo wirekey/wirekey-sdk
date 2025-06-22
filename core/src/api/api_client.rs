@@ -9,14 +9,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use hmac::{Hmac, Mac};
 use zeroize::Zeroize;
-use crate::api::http_send::{HttpSend, DefaultSender};
+use crate::api::http_sender::{HttpSender, DefaultSender};
 use crate::api::rng_provider::{RngProvider};
 
 #[derive(Zeroize)]
 #[zeroize(drop)]
 pub struct SessionKey(pub Vec<u8>);
 
-pub struct ApiClient<S: HttpSend = DefaultSender, R: RngProvider = OsRng> {
+pub struct ApiClient<S: HttpSender = DefaultSender, R: RngProvider = OsRng> {
     pub(super) client: Client,
     pub(super) sender: S,
     pub(super) rng: Arc<Mutex<R>>,
@@ -33,7 +33,7 @@ impl ApiClient<DefaultSender, OsRng> {
     }
 }
 
-impl<S: HttpSend, R: RngProvider> ApiClient<S, R> {
+impl<S: HttpSender, R: RngProvider> ApiClient<S, R> {
     pub fn with_dependencies(server_url: String, client_id: &str, sender: S, rng: R) -> ApiClient<S, R> {
         Self {
             client: Client::new(),

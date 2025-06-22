@@ -1,8 +1,7 @@
-use std::sync::{Arc, Mutex};
+use crate::api::http_sender::HttpSender;
 use async_trait::async_trait;
-use http::StatusCode;
 use reqwest::{Request, RequestBuilder, Response};
-use crate::api::http_send::HttpSend;
+use std::sync::{Arc, Mutex};
 
 // Thread-safe mock that captures requests for inspection
 pub(super) struct MockSender {
@@ -24,7 +23,7 @@ impl MockSender {
 }
 
 #[async_trait]
-impl HttpSend for MockSender {
+impl HttpSender for MockSender {
     async fn send(&self, request: RequestBuilder) -> Result<Response, reqwest::Error> {
         // Build the request to capture it
         let built_request = request.build()?;
@@ -33,28 +32,4 @@ impl HttpSend for MockSender {
         // Return the mocked response
         self.responses.lock().unwrap().remove(0)
     }
-}
-
-// Helper function to create a successful response
-pub(super) fn create_ok_response() -> Response {
-    create_ok_response_with_payload(Vec::new())
-}
-
-pub(super) fn create_ok_response_with_payload(payload: Vec<u8>) -> Response {
-    Response::from(
-        http::response::Builder::new()
-            .status(StatusCode::OK)
-            .body(payload)
-            .unwrap()
-    )
-}
-
-// Helper function to create an error response
-pub(super) fn create_error_response(status: StatusCode, body: &str) -> Response {
-    Response::from(
-        http::response::Builder::new()
-            .status(status)
-            .body(body.as_bytes().to_vec())
-            .unwrap()
-    )
 }

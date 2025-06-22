@@ -4,9 +4,10 @@ use reqwest::{StatusCode};
 use serde::Serialize;
 use serde_json::json;
 use crate::api::api_client::{error_if_unsuccessful, SessionKey};
-use crate::api::http_send::DefaultSender;
+use crate::api::http_sender::DefaultSender;
 use crate::api::mock_rng_provider::MockRngProvider;
-use crate::api::mock_sender::{create_error_response, create_ok_response, MockSender};
+use crate::api::mock_sender::{MockSender};
+use crate::api::test_utils::{create_error_response, create_ok_response};
 
 #[test]
 fn new_creates_api_client_with_expected_values() {
