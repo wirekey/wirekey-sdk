@@ -86,6 +86,7 @@ The core SDK will manage sessions internally, I would like to expose only simple
 - If part of test initialization is complex (at least 5 lines) and repeated often in multiple tests, consider creating a test helper function
 - Each test case should be defined in a separate unit test
 - Use `function_under_test_condition_expected_result` pattern for unit test names
+- When testing that a `Result` returned from the system under test is successful, use `.expect(...)` with a descriptive message instead of `assert!(result.is_ok())`.
 
 ### 5. Documentation
 
