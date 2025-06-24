@@ -2017,6 +2017,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-trait",
+ "base64",
  "bincode",
  "ed25519-dalek",
  "hex",

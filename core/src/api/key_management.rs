@@ -10,11 +10,10 @@ use crate::ApiClient;
 #[async_trait::async_trait]
 pub trait KeyManagementApi {
     async fn get_prekey_bundle(&self, client_id: &str) -> Result<PreKeyBundle, Error>;
-    async fn upload_signed_prekey(&self, prekey: PublicSignedPreKey) -> Result<(), Error>;
-    async fn upload_one_time_prekeys(&self, prekeys: Vec<PublicOneTimePreKey>) -> Result<(), Error>;
+    async fn upload_prekey_bundle(&self, bundle: &PreKeyBundle) -> Result<(), Error>;
     async fn get_prekey_count(&self) -> Result<u32, Error>;
     async fn get_private_keys(&self) -> Result<PrivateKeys, Error>;
-    async fn upload_private_keys(&self, private_keys: PrivateKeys) -> Result<(), Error>;
+    async fn upload_private_keys(&self, private_keys: &PrivateKeys) -> Result<(), Error>;
 }
 
 #[async_trait::async_trait]
@@ -28,16 +27,9 @@ impl<S: HttpSender, R: RngProvider>KeyManagementApi for ApiClient<S, R> {
         Ok(prekey_bundle)
     }
 
-    async fn upload_signed_prekey(&self, prekey: PublicSignedPreKey) -> Result<(), Error> {
-        let url = format!("{}/signed-prekey", self.server_url);
-        _ = self.send_post_json(&url, &prekey).await?;
-
-        Ok(())
-    }
-
-    async fn upload_one_time_prekeys(&self, prekeys: Vec<PublicOneTimePreKey>) -> Result<(), Error> {
-        let url = format!("{}/one-time-prekeys", self.server_url);
-        _ = self.send_post_json(&url, &prekeys).await?;
+    async fn upload_prekey_bundle(&self, bundle: &PreKeyBundle) -> Result<(), Error> {
+        let url = format!("{}/prekey-bundle", self.server_url);
+        _ = self.send_post_json(&url, &bundle).await?;
 
         Ok(())
     }
@@ -70,13 +62,13 @@ impl<S: HttpSender, R: RngProvider>KeyManagementApi for ApiClient<S, R> {
         Ok(private_keys)
     }
 
-    async fn upload_private_keys(&self, private_keys: PrivateKeys) -> Result<(), Error> {
+    async fn upload_private_keys(&self, private_keys: &PrivateKeys) -> Result<(), Error> {
         let cipher = {
             let guard = self.cipher.lock().unwrap();
             guard.as_ref().cloned().ok_or(Error::Unauthenticated)?
         };
 
-        let serialized = serde_json::to_vec(&private_keys)
+        let serialized = serde_json::to_vec(private_keys)
             .map_err(|e| anyhow::anyhow!("Failed to serialize request payload: {}", e))?;
         let encrypted = cipher.encrypt(&serialized)?;
 
